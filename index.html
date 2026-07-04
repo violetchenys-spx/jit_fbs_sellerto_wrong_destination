@@ -305,19 +305,21 @@ async function sendBatch(){
     const entry = indexedPending[0]; 
     
     try{
-        // 🛠️ 關鍵修正：改用 URLSearchParams 封裝資料，這對 GAS 的 no-cors 穿透力是 100%
-        const formData = new URLSearchParams();
-        formData.append('warehouse', entry.item.warehouse);
-        formData.append('qrContent', entry.item.code);
+        // 🚀 打包成純文字 JSON 格式
+        const payload = {
+            warehouse: entry.item.warehouse,
+            qrContent: entry.item.code
+        };
 
+        // 使用 text/plain 標頭，這是 no-cors 模式下最安全的通行證
         await fetch(GAS_ENDPOINT, {
             method: 'POST',
-            mode: 'no-cors', 
-            // headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, // 修改標頭
-            body: formData.toString() // 改傳送網址參數字串
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'text/plain' },
+            body: JSON.stringify(payload) // 轉成純文字字串送出
         });
         
-        // 只要沒有噴網路斷線錯誤，就代表 Google 已收件
+        // 在 no-cors 模式下，只要沒有噴網路錯誤，就代表 Google 已成功收件
         buffer[entry.index].sent = true;
         saveLocalBuffer();
         appendLog(`✅ 成功上傳至雲端試算表: ${entry.item.code}`);
