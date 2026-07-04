@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>📦 紙箱即時掃描系統</title>
+  <title>📦 Seller To 錯倉刷箱系統</title>
   <script src="https://unpkg.com/html5-qrcode"></script>
   <style>
     body {
@@ -42,7 +42,8 @@
       background-color: #fff;
     }
 
-    #reader {
+    /* 確保容器 ID 100% 與你的代碼一致 */
+    #qr-reader {
       width: 100%;
       border-radius: 8px;
       overflow: hidden;
@@ -51,21 +52,32 @@
       margin-bottom: 15px;
     }
 
-    .btn-start {
+    .btn {
       display: inline-block;
       width: 100%;
-      background-color: #48bb78;
       color: white;
       border: none;
-      padding: 18px 0;
-      font-size: 18px;
+      padding: 15px 0;
+      font-size: 16px;
       font-weight: bold;
       border-radius: 8px;
       cursor: pointer;
-      box-shadow: 0 4px 6px rgba(72, 187, 120, 0.3);
-      margin-bottom: 15px;
+      margin-bottom: 10px;
     }
-    .btn-start:active { background-color: #38a169; }
+    .btn-start { background-color: #48bb78; box-shadow: 0 4px 6px rgba(72, 187, 120, 0.3); }
+    .btn-stop { background-color: #e53e3e; }
+    .btn-clear { background-color: #4a5568; }
+
+    .dashboard {
+      display: flex;
+      justify-content: space-between;
+      margin: 15px 0;
+      background: #edf2f7;
+      padding: 10px;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+    .dash-item { flex: 1; text-align: center; font-weight: bold; }
 
     #status {
       padding: 12px;
@@ -73,17 +85,42 @@
       font-weight: bold;
       background-color: #e2e8f0;
       color: #4a5568;
-      word-break: break-all;
+      margin-bottom: 15px;
     }
-    .success { background-color: #c6f6d5 !important; color: #22543d !important; }
-    .loading { background-color: #feebc8 !important; color: #744210 !important; }
-    .error { background-color: #fed7d7 !important; color: #742a2a !important; }
+    
+    #log {
+      width: 100%;
+      height: 120px;
+      background: #1a202c;
+      color: #cbd5e0;
+      font-family: monospace;
+      font-size: 12px;
+      padding: 8px;
+      box-sizing: border-box;
+      border-radius: 6px;
+      text-align: left;
+      white-space: pre-wrap;
+      overflow-y: auto;
+    }
+
+    #scanTable {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 15px;
+      font-size: 14px;
+    }
+    #scanTable th, #scanTable td {
+      border: 1px solid #e2e8f0;
+      padding: 8px;
+      text-align: center;
+    }
+    #scanTable th { background-color: #edf2f7; }
   </style>
 </head>
 <body>
 
 <div class="container">
-  <h2>📦 紙箱即時掃描系統 (GitHub強制版)</h2>
+  <h2>📦 離線緩存即時刷箱系統</h2>
   
   <div class="form-group">
     <label for="warehouse-select">📍 目前刷箱倉庫：</label>
@@ -93,89 +130,113 @@
     </select>
   </div>
 
-  <button id="active-camera-btn" class="btn-start" onclick="startScanning()">📷 啟動即時鏡頭掃描</button>
-  <div id="reader"></div>
-  <div id="status">請先點擊上方綠色按鈕開啟相機</div>
+  <button id="btnStartCamera" class="btn btn-start">📷 啟動即時鏡頭掃描</button>
+  <button id="btnStop" class="btn btn-stop">🛑 停止相機</button>
+  <button id="btnSync" class="btn btn-clear">🗑️ 清空本地紀錄</button>
+
+  <div id="qr-reader"></div>
+  
+  <div id="status">狀態：等待啟動</div>
+
+  <div class="dashboard">
+    <div class="dash-item">總掃描: <span id="totalCount">0</span></div>
+    <div class="dash-item" style="color: #2f855a;">已上傳: <span id="uploadedCount">0</span></div>
+    <div class="dash-item" style="color: #c53030;">待上傳: <span id="pendingCount">0</span></div>
+  </div>
+
+  <textarea id="log" readonly placeholder="系統日誌紀錄..."></textarea>
+
+  <table id="scanTable">
+    <thead>
+      <tr>
+        <th>序號</th>
+        <th>QR Code 內容</th>
+        <th>時間</th>
+        <th>狀態</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
 </div>
 
 <script>
-  let isProcessing = false;
-  let html5QrCode = null;
+// DOM 元素
+const btnStartCamera = document.getElementById('btnStartCamera');
+const btnStop = document.getElementById('btnStop');
+const btnSync = document.getElementById('btnSync');
+const logEl = document.getElementById('log');
+const statusEl = document.getElementById('status');
+const totalCountEl = document.getElementById('totalCount');
+const scanTableBody = document.querySelector('#scanTable tbody');
+const uploadedCountEl = document.getElementById('uploadedCount'); 
+const pendingCountEl = document.getElementById('pendingCount');
 
-  // 使用你的個人帳號 GAS 網址
-  const GAS_URL = "https://script.google.com/macros/s/AKfycbxnHOra_04o4VcYRQlKOCmWlvzLZ0eHlP1q0Yd6QWDcEIi0bvkv5Tsso5-ghzfobhlZ/exec"; 
+// 配置常數
+const GAS_ENDPOINT = "https://script.google.com/macros/s/AKfycbxnHOra_04o4VcYRQlKOCmWlvzLZ0eHlP1q0Yd6QWDcEIi0bvkv5Tsso5-ghzfobhlZ/exec"; 
+const LOCAL_KEY = 'qr_scan_offline_buffer_v1_simple';
+const BATCH_SIZE = 1; // 隨掃隨傳模式
+const BATCH_TIMEOUT_MS = 5000; // 離線時每5秒自動檢查網路重試
 
-  function startScanning() {
-    const statusDiv = document.getElementById('status');
-    statusDiv.className = 'loading';
-    statusDiv.innerText = '正在強力喚醒手機後鏡頭...';
+let html5QrScanner = null;
+let isScanning = false;
+let audioContext = null;
+let buffer = []; 
+let sending = false;
+let timerId = null;
+
+// ====================================================================
+// 核心處理邏輯（完全沿用你驗證成功的機制）
+// ====================================================================
+
+function updateScanList(){
+    let uploadedCount = 0;
+    totalCountEl.textContent = buffer.length;
+    scanTableBody.innerHTML = ''; 
     
-    document.getElementById('active-camera-btn').style.display = 'none';
-
-    // 關鍵改動：改用 Html5QrCode 核心，不帶任何內建 UI 的純淨模式
-    html5QrCode = new Html5QrCode("reader");
-
-    // 強制指定使用後置鏡頭（environment），並給予極寬容的對焦設定
-    html5QrCode.start(
-      { facingMode: "environment" }, 
-      {
-        fps: 25,
-        qrbox: function(viewfinderWidth, viewfinderHeight) {
-          var qrboxSize = Math.floor(Math.min(viewfinderWidth, viewfinderHeight) * 0.75);
-          return { width: qrboxSize, height: qrboxSize };
+    for(let i = buffer.length - 1; i >= 0; i--){
+        const item = buffer[i];
+        const row = scanTableBody.insertRow();
+        row.insertCell().textContent = i + 1; 
+        row.insertCell().textContent = item.code; 
+        row.insertCell().textContent = item.ts; 
+        
+        const statusCell = row.insertCell();
+        if(item.sent){
+            row.style.backgroundColor = '#d4edda'; 
+            statusCell.textContent = '✅ 已上傳';
+            uploadedCount++;
+        } else {
+            statusCell.textContent = '⏳ 待上傳';
         }
-      },
-      onScanSuccess,
-      onScanFailure
-    )
-    .then(() => {
-      statusDiv.className = 'success';
-      statusDiv.innerText = '📷 鏡頭啟動成功！請對準 QR Code';
-    })
-    .catch(err => {
-      document.getElementById('active-camera-btn').style.display = 'inline-block';
-      statusDiv.className = 'error';
-      statusDiv.innerText = '❌ 鏡頭啟動失敗。錯誤訊息：' + err;
-    });
-  }
-
-  function onScanSuccess(decodedText, decodedResult) {
-    if (isProcessing) return;
-    isProcessing = true;
+    }
+    uploadedCountEl.textContent = uploadedCount;
+    pendingCountEl.textContent = buffer.length - uploadedCount;
+}
     
-    const statusDiv = document.getElementById('status');
-    const warehouse = document.getElementById('warehouse-select').value;
+function loadLocalBuffer(){
+    try{
+        const raw = localStorage.getItem(LOCAL_KEY);
+        if(raw){ 
+            buffer = JSON.parse(raw); 
+            appendLog(`從 localStorage 載入 ${buffer.length} 筆紀錄`); 
+        }
+    }catch(e){ console.error(e);} 
+    updateScanList(); 
+}
     
-    statusDiv.className = 'loading';
-    statusDiv.innerText = `[${warehouse}] 嗶！讀取成功，同步寫入中...`;
+function saveLocalBuffer(){ localStorage.setItem(LOCAL_KEY, JSON.stringify(buffer)); }
 
-    fetch(GAS_URL, {
-      method: 'POST',
-      mode: 'no-cors',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ warehouse: warehouse, qrContent: decodedText })
-    })
-    .then(() => {
-      statusDiv.className = 'success';
-      statusDiv.innerText = `【${warehouse}】成功寫入：${decodedText}`;
-      
-      setTimeout(() => {
-        statusDiv.className = 'success';
-        statusDiv.innerText = '請對準下一個紙箱 QR Code';
-        isProcessing = false;
-      }, 2000);
-    })
-    .catch(err => {
-      statusDiv.className = 'error';
-      statusDiv.innerText = '傳送錯誤：' + err;
-      setTimeout(() => { isProcessing = false; }, 2000);
-    });
-  }
+function appendLog(text){
+    let safeText = String(text);
+    if (safeText.includes('<html') || safeText.length > 500) {
+        safeText = safeText.substring(0, 500) + '... (資料過長已截斷)';
+    }
+    logEl.textContent = new Date().toLocaleTimeString('zh-TW') + ' - ' + safeText + '\n' + logEl.textContent;
+}
 
-  function onScanFailure(error) {
-    // 靜態忽略日常掃描雜訊
-  }
-</script>
-
-</body>
-</html>
+function initAudioContext() {
+    if (audioContext) return;
+    try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        audioContext = new AudioContextClass();
+    } catch (e) { console.warn("無法初始化音效模組:", e); }
