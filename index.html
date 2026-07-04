@@ -42,7 +42,6 @@
       background-color: #fff;
     }
 
-    /* 確保容器 ID 100% 與你的代碼一致 */
     #qr-reader {
       width: 100%;
       border-radius: 8px;
@@ -120,7 +119,7 @@
 <body>
 
 <div class="container">
-  <h2>📦 離線緩存即時刷箱系統</h2>
+  <h2>📦 Seller To 錯倉刷箱系統</h2>
   
   <div class="form-group">
     <label for="warehouse-select">📍 目前刷箱倉庫：</label>
@@ -171,11 +170,11 @@ const scanTableBody = document.querySelector('#scanTable tbody');
 const uploadedCountEl = document.getElementById('uploadedCount'); 
 const pendingCountEl = document.getElementById('pendingCount');
 
-// 配置常數
+// 配置常數（使用個人帳號 GAS URL）
 const GAS_ENDPOINT = "https://script.google.com/macros/s/AKfycbxnHOra_04o4VcYRQlKOCmWlvzLZ0eHlP1q0Yd6QWDcEIi0bvkv5Tsso5-ghzfobhlZ/exec"; 
 const LOCAL_KEY = 'qr_scan_offline_buffer_v1_simple';
-const BATCH_SIZE = 1; // 隨掃隨傳模式
-const BATCH_TIMEOUT_MS = 5000; // 離線時每5秒自動檢查網路重試
+const BATCH_SIZE = 1; 
+const BATCH_TIMEOUT_MS = 5000; 
 
 let html5QrScanner = null;
 let isScanning = false;
@@ -185,7 +184,7 @@ let sending = false;
 let timerId = null;
 
 // ====================================================================
-// 核心處理邏輯（完全沿用你驗證成功的機制）
+// 核心處理邏輯
 // ====================================================================
 
 function updateScanList(){
@@ -240,3 +239,176 @@ function initAudioContext() {
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
         audioContext = new AudioContextClass();
     } catch (e) { console.warn("無法初始化音效模組:", e); }
+}
+
+function playBeep() {
+    initAudioContext();
+    if (!audioContext) return;
+    
+    const duration = 0.1;
+    const frequency = 880;
+    const volume = 0.3;
+    
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+
+    oscillator.type = 'square';
+    oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime);
+    gainNode.gain.setValueAtTime(volume, audioContext.currentTime);
+    
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+
+    oscillator.start();
+    oscillator.stop(audioContext.currentTime + duration);
+}
+
+function enqueue(code){
+    playBeep();
+    
+    const isDuplicate = buffer.some(item => item.code === code); 
+    if(isDuplicate){
+        appendLog(`⚠️ 忽略重複條碼: ${code}`); 
+        return; 
+    }
+    
+    const warehouse = document.getElementById('warehouse-select').value;
+    const now = new Date();
+    const localTimeString = now.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false });
+    
+    const item = {
+        warehouse: warehouse, 
+        code: code,
+        ts: localTimeString,
+        sent: false
+    };
+    
+    buffer.push(item);
+    saveLocalBuffer();
+    appendLog(`🟢 成功讀取: ${code}`);
+    updateScanList();
+    
+    sendBatch();
+}
+
+async function sendBatch(){
+    if(sending) return;
+    
+    const indexedPending = buffer
+        .map((item, index) => ({ item, index }))
+        .filter(entry => !entry.item.sent);
+
+    if(indexedPending.length === 0) return; 
+    if(!navigator.onLine){ appendLog('📶 目前處於離線狀態，資料已安全儲存。'); return; }
+    
+    sending = true;
+    const entry = indexedPending[0]; 
+    
+    try{
+        await fetch(GAS_ENDPOINT, {
+            method: 'POST',
+            mode: 'no-cors', 
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                warehouse: entry.item.warehouse,
+                qrContent: entry.item.code
+            })
+        });
+        
+        buffer[entry.index].sent = true;
+        saveLocalBuffer();
+        appendLog(`✅ 成功上傳至雲端試算表: ${entry.item.code}`);
+        updateScanList();
+
+        const remaining = buffer.filter(item => !item.sent).length;
+        if (remaining > 0) { setTimeout(sendBatch, 300); }
+        
+    }catch(err){
+        appendLog(`🔴 上傳失敗。原因: ${err.message}`); 
+    } finally {
+        sending = false;
+    }
+}
+
+function startBatchTimer(){
+    stopBatchTimer();
+    timerId = setInterval(()=>{ sendBatch(); }, BATCH_TIMEOUT_MS);
+}
+
+function stopBatchTimer(){ 
+    if(timerId) clearInterval(timerId); 
+    timerId = null; 
+}
+
+function clearLocalBuffer() {
+    if (isScanning) {
+        alert('🚫 請先點擊「停止相機」按鈕結束作業後，才能清空歷史紀錄。');
+        return;
+    }
+    const pendingCount = buffer.filter(item => !item.sent).length;
+    let msg = "確定要清空歷史紀錄嗎？";
+    if (pendingCount > 0) { msg = `注意：您還有 ${pendingCount} 筆待上傳資料。確定要強行清空嗎？`; }
+    
+    if (!confirm(msg)) return;
+
+    stopBatchTimer(); 
+    buffer = [];
+    localStorage.removeItem(LOCAL_KEY);
+    updateScanList();
+    appendLog('✅ 本地紀錄已完全清空。');
+}
+
+// ====================================================================
+// 控制按鈕監聽（完全沿用你最穩定的啟動語法）
+// ====================================================================
+
+btnStartCamera.addEventListener('click', ()=>{
+    initAudioContext();
+    if(html5QrScanner) return; 
+        
+    html5QrScanner = new Html5Qrcode("qr-reader");
+    html5QrScanner.start({ facingMode: 'environment' }, {
+        fps: 10,
+        qrbox: { width: 250, height: 250 }
+    }, (decodedText, decodedResult)=>{
+        statusEl.textContent = '最新掃描: ' + decodedText;
+        enqueue(decodedText);
+    }, (errorMessage) => {
+        // 忽略日常雜訊
+    }).then(()=>{
+        appendLog('🚀 相機鏡頭啟動成功'); 
+        statusEl.textContent = '掃描中...';
+        isScanning = true; 
+        btnSync.disabled = true; 
+        startBatchTimer();
+    }).catch(err=>{ 
+        alert('無法啟動相機，請確認是否由 Safari/Chrome 開啟並允許權限: ' + err); 
+    });
+});
+
+btnStop.addEventListener('click', ()=>{
+    if(html5QrScanner){
+        html5QrScanner.stop().then(()=>{
+            html5QrScanner.clear(); 
+            html5QrScanner = null; 
+            appendLog('🛑 相機已安全關閉'); 
+            statusEl.textContent = '已停止';
+            isScanning = false;
+            btnSync.disabled = false; 
+        }).catch(e => console.error(e)); 
+    }
+    stopBatchTimer();
+});
+
+btnSync.addEventListener('click', ()=>{ clearLocalBuffer(); });
+
+// 初始化
+loadLocalBuffer();
+window.addEventListener('online', ()=>{ 
+    appendLog('📶 偵測到網路恢復，啟動自動補傳機制...'); 
+    sendBatch(); 
+});
+</script>
+
+</body>
+</html>
