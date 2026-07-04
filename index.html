@@ -73,19 +73,17 @@
       font-weight: bold;
       background-color: #e2e8f0;
       color: #4a5568;
+      word-break: break-all;
     }
     .success { background-color: #c6f6d5 !important; color: #22543d !important; }
     .loading { background-color: #feebc8 !important; color: #744210 !important; }
     .error { background-color: #fed7d7 !important; color: #742a2a !important; }
-    
-    /* 隱藏套件內建的醜按鈕 */
-    #reader button { display: none !important; }
   </style>
 </head>
 <body>
 
 <div class="container">
-  <h2>📦 紙箱即時掃描系統 (GitHub版)</h2>
+  <h2>📦 紙箱即時掃描系統 (GitHub強制版)</h2>
   
   <div class="form-group">
     <label for="warehouse-select">📍 目前刷箱倉庫：</label>
@@ -102,36 +100,43 @@
 
 <script>
   let isProcessing = false;
-  let html5QrcodeScanner = null;
+  let html5QrCode = null;
 
-  // ⚠️ 記得把下面這行換成你自己的 GAS 網址 ⚠️
+  // 使用你的個人帳號 GAS 網址
   const GAS_URL = "https://script.google.com/macros/s/AKfycbxnHOra_04o4VcYRQlKOCmWlvzLZ0eHlP1q0Yd6QWDcEIi0bvkv5Tsso5-ghzfobhlZ/exec"; 
 
   function startScanning() {
-    document.getElementById('active-camera-btn').style.display = 'none';
     const statusDiv = document.getElementById('status');
     statusDiv.className = 'loading';
-    statusDiv.innerText = '正在向手機請求相機存取權限...';
-
-    html5QrcodeScanner = new Html5QrcodeScanner(
-      "reader", 
-      { 
-        fps: 20, // 擺脫 Google 限制後，可以把幀率調高，掃描反應會更靈敏
-        qrbox: function(viewfinderWidth, viewfinderHeight) {
-          var qrboxSize = Math.floor(Math.min(viewfinderWidth, viewfinderHeight) * 0.7);
-          return { width: qrboxSize, height: qrboxSize };
-        },
-        rememberLastUsedCamera: true
-      }
-    );
-    html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+    statusDiv.innerText = '正在強力喚醒手機後鏡頭...';
     
-    setTimeout(() => {
-      if (statusDiv.className !== 'error') {
-        statusDiv.className = '';
-        statusDiv.innerText = '📷 鏡頭已啟動，請對準紙箱 QR Code';
-      }
-    }, 1000);
+    document.getElementById('active-camera-btn').style.display = 'none';
+
+    // 關鍵改動：改用 Html5QrCode 核心，不帶任何內建 UI 的純淨模式
+    html5QrCode = new Html5QrCode("reader");
+
+    // 強制指定使用後置鏡頭（environment），並給予極寬容的對焦設定
+    html5QrCode.start(
+      { facingMode: "environment" }, 
+      {
+        fps: 25,
+        qrbox: function(viewfinderWidth, viewfinderHeight) {
+          var qrboxSize = Math.floor(Math.min(viewfinderWidth, viewfinderHeight) * 0.75);
+          return { width: qrboxSize, height: qrboxSize };
+        }
+      },
+      onScanSuccess,
+      onScanFailure
+    )
+    .then(() => {
+      statusDiv.className = 'success';
+      statusDiv.innerText = '📷 鏡頭啟動成功！請對準 QR Code';
+    })
+    .catch(err => {
+      document.getElementById('active-camera-btn').style.display = 'inline-block';
+      statusDiv.className = 'error';
+      statusDiv.innerText = '❌ 鏡頭啟動失敗。錯誤訊息：' + err;
+    });
   }
 
   function onScanSuccess(decodedText, decodedResult) {
@@ -142,22 +147,20 @@
     const warehouse = document.getElementById('warehouse-select').value;
     
     statusDiv.className = 'loading';
-    statusDiv.innerText = `[${warehouse}] 嗶！讀取成功，正在同步寫入雲端...`;
+    statusDiv.innerText = `[${warehouse}] 嗶！讀取成功，同步寫入中...`;
 
-    // 透過 Fetch API 跨網域發送資料給 Google Apps Script 後端
     fetch(GAS_URL, {
       method: 'POST',
-      mode: 'no-cors', // 使用 no-cors 模式，完美相容 Google 伺服器的重新導向機制
+      mode: 'no-cors',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ warehouse: warehouse, qrContent: decodedText })
     })
     .then(() => {
-      // 顯示成功狀態
       statusDiv.className = 'success';
-      statusDiv.innerText = `【${warehouse}】成功寫入條碼：${decodedText}`;
+      statusDiv.innerText = `【${warehouse}】成功寫入：${decodedText}`;
       
       setTimeout(() => {
-        statusDiv.className = '';
+        statusDiv.className = 'success';
         statusDiv.innerText = '請對準下一個紙箱 QR Code';
         isProcessing = false;
       }, 2000);
@@ -170,7 +173,7 @@
   }
 
   function onScanFailure(error) {
-    // 忽略日常尋找條碼時的隱形通知，避免刷屏
+    // 靜態忽略日常掃描雜訊
   }
 </script>
 
