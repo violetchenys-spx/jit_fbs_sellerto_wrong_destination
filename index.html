@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>📦 紙箱即時掃描系統</title>
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      text-align: center;
+      margin: 0;
+      padding: 15px;
+      background-color: #f5f5f7;
+    }
+    .container {
+      max-width: 500px;
+      margin: 0 auto;
+      background: white;
+      padding: 20px;
+      border-radius: 12px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    h2 { color: #333; margin-top: 0; }
+    
+    .form-group {
+      margin-bottom: 20px;
+      text-align: left;
+    }
+    .form-group label {
+      display: block;
+      font-weight: bold;
+      margin-bottom: 8px;
+      color: #4a5568;
+    }
+    .form-group select {
+      width: 100%;
+      padding: 12px;
+      font-size: 16px;
+      border: 1px solid #cbd5e0;
+      border-radius: 6px;
+      background-color: #fff;
+    }
+
+    #reader {
+      width: 100%;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #2d3748;
+      min-height: 250px;
+      margin-bottom: 15px;
+    }
+
+    .btn-start {
+      display: inline-block;
+      width: 100%;
+      background-color: #48bb78;
+      color: white;
+      border: none;
+      padding: 18px 0;
+      font-size: 18px;
+      font-weight: bold;
+      border-radius: 8px;
+      cursor: pointer;
+      box-shadow: 0 4px 6px rgba(72, 187, 120, 0.3);
+      margin-bottom: 15px;
+    }
+    .btn-start:active { background-color: #38a169; }
+
+    #status {
+      padding: 12px;
+      border-radius: 6px;
+      font-weight: bold;
+      background-color: #e2e8f0;
+      color: #4a5568;
+    }
+    .success { background-color: #c6f6d5 !important; color: #22543d !important; }
+    .loading { background-color: #feebc8 !important; color: #744210 !important; }
+    .error { background-color: #fed7d7 !important; color: #742a2a !important; }
+    
+    /* 隱藏套件內建的醜按鈕 */
+    #reader button { display: none !important; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <h2>📦 紙箱即時掃描系統 (GitHub版)</h2>
+  
+  <div class="form-group">
+    <label for="warehouse-select">📍 目前刷箱倉庫：</label>
+    <select id="warehouse-select">
+      <option value="楊梅">楊梅</option>
+      <option value="安南三">安南三</option>
+    </select>
+  </div>
+
+  <button id="active-camera-btn" class="btn-start" onclick="startScanning()">📷 啟動即時鏡頭掃描</button>
+  <div id="reader"></div>
+  <div id="status">請先點擊上方綠色按鈕開啟相機</div>
+</div>
+
+<script>
+  let isProcessing = false;
+  let html5QrcodeScanner = null;
+
+  // ⚠️ 記得把下面這行換成你自己的 GAS 網址 ⚠️
+  const GAS_URL = "https://script.google.com/a/macros/shopee.com/s/AKfycbwXy8e3YjkG31-a2OiAfOij0s7_zZ6qYAcmk_RzCKwi1004A9CcJGsb338KdSMJj13w/exec"; 
+
+  function startScanning() {
+    document.getElementById('active-camera-btn').style.display = 'none';
+    const statusDiv = document.getElementById('status');
+    statusDiv.className = 'loading';
+    statusDiv.innerText = '正在向手機請求相機存取權限...';
+
+    html5QrcodeScanner = new Html5QrcodeScanner(
+      "reader", 
+      { 
+        fps: 20, // 擺脫 Google 限制後，可以把幀率調高，掃描反應會更靈敏
+        qrbox: function(viewfinderWidth, viewfinderHeight) {
+          var qrboxSize = Math.floor(Math.min(viewfinderWidth, viewfinderHeight) * 0.7);
+          return { width: qrboxSize, height: qrboxSize };
+        },
+        rememberLastUsedCamera: true
+      }
+    );
+    html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+    
+    setTimeout(() => {
+      if (statusDiv.className !== 'error') {
+        statusDiv.className = '';
+        statusDiv.innerText = '📷 鏡頭已啟動，請對準紙箱 QR Code';
+      }
+    }, 1000);
+  }
+
+  function onScanSuccess(decodedText, decodedResult) {
+    if (isProcessing) return;
+    isProcessing = true;
+    
+    const statusDiv = document.getElementById('status');
+    const warehouse = document.getElementById('warehouse-select').value;
+    
+    statusDiv.className = 'loading';
+    statusDiv.innerText = `[${warehouse}] 嗶！讀取成功，正在同步寫入雲端...`;
+
+    // 透過 Fetch API 跨網域發送資料給 Google Apps Script 後端
+    fetch(GAS_URL, {
+      method: 'POST',
+      mode: 'no-cors', // 使用 no-cors 模式，完美相容 Google 伺服器的重新導向機制
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ warehouse: warehouse, qrContent: decodedText })
+    })
+    .then(() => {
+      // 顯示成功狀態
+      statusDiv.className = 'success';
+      statusDiv.innerText = `【${warehouse}】成功寫入條碼：${decodedText}`;
+      
+      setTimeout(() => {
+        statusDiv.className = '';
+        statusDiv.innerText = '請對準下一個紙箱 QR Code';
+        isProcessing = false;
+      }, 2000);
+    })
+    .catch(err => {
+      statusDiv.className = 'error';
+      statusDiv.innerText = '傳送錯誤：' + err;
+      setTimeout(() => { isProcessing = false; }, 2000);
+    });
+  }
+
+  function onScanFailure(error) {
+    // 忽略日常尋找條碼時的隱形通知，避免刷屏
+  }
+</script>
+
+</body>
+</html>
